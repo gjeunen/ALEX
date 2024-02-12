@@ -1,0 +1,100 @@
+#! /usr/bin/env python3
+
+## import modules
+from function import __version__
+import rich
+import rich_click as click
+import collections
+
+blastDict = collections.defaultdict(dict)
+speciesListDict = collections.defaultdict(list)
+
+with open('zotus_mock_community.fasta.nt.blastn', 'r') as infile:
+    for line in infile:
+        seqID = line.split('\t')[0]
+        speciesName = line.split('\t')[2]
+        pident = float(line.split('\t')[5])
+        qcov = int(line.split('\t')[7])
+        if seqID not in blastDict:
+            blastDict[seqID]['speciesName'] = speciesName
+            blastDict[seqID]['pident'] = pident
+            blastDict[seqID]['qcov'] = qcov
+        else:
+            if blastDict[seqID]['pident'] <= pident and blastDict[seqID]['qcov'] <= qcov and blastDict[seqID]['speciesName'] != speciesName and speciesName not in speciesListDict[seqID] and speciesName != 'N/A':
+                speciesListDict[seqID].append(speciesName)
+
+zotuList = []
+with open('zotutable.txt', 'r') as zotufile:
+    for line in zotufile:
+        seqID = line.split('\t')[0]
+        if seqID != 'ID':
+            zotuList.append(seqID)
+
+for item in zotuList:
+    if item not in blastDict:
+        blastDict[item]['pident'] = 'NA'
+        blastDict[item]['qcov'] = 'NA'
+        blastDict[item]['speciesName'] = 'NA'
+
+index_map = {v: i for i, v in enumerate(zotuList)}
+blastDict = dict(sorted(blastDict.items(), key=lambda pair: index_map[pair[0]]))
+
+taxonIdsDict = {}
+taxonNamesDict = {}
+with open('names.dmp', 'r') as infile:
+    for line in infile:
+        sc = line.split('\t')[6]
+        if sc == 'scientific name':
+            taxIdName = line.split('\t|\t')[0]
+            taxonName = line.split('\t|\t')[1].replace(' ', '_')
+            taxonNamesDict[taxIdName] = taxonName
+            taxonIdsDict[taxonName] = taxIdName
+
+taxonIDsRankDict = {}
+taxonIDsRankUpDict = collections.defaultdict(list)
+with open('nodes.dmp', 'r') as infile:
+    for line in infile:
+        taxonId = line.split('\t|\t')[0]
+        taxonIdUp = line.split('\t|\t')[1]
+        taxonIdRank = line.split('\t|\t')[2]
+        taxonIDsRankDict[taxonId] = [taxonIdRank, taxonIdUp]
+        taxonIDsRankUpDict[taxonIdUp].append(taxonId)
+
+taxonomicIDlist = []
+for item in blastDict:
+    if blastDict[item]['speciesName'].replace(' ', '_') in taxonIdsDict:
+        blastDict[item]['taxonID'] = taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')]
+        if taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')] not in taxonomicIDlist:
+            taxonomicIDlist.append(taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')])
+    else:
+        blastDict[item]['taxonID'] = 'NA'
+
+speciesLineagesDict = collections.defaultdict(list)
+for item in taxonomicIDlist:
+    initialItem = item
+    while item != taxonIDsRankDict[item][1]:
+        speciesLineagesDict[initialItem].append([taxonIDsRankDict[item][0], item, taxonNamesDict[item]])
+        item = taxonIDsRankDict[item][1]
+
+ranksFilteredSpeciesLineagesDict = collections.defaultdict(list)
+ranksNeeded = ['superkingdom', 'phylum', 'class', 'order', 'family', 'genus']
+for lineage in speciesLineagesDict:
+    for rank in ranksNeeded:
+        rankPresent = 0
+        for item in speciesLineagesDict[lineage]:
+            if rank == item[0]:
+                rankPresent = 1
+                ranksFilteredSpeciesLineagesDict[lineage].append(item[2])
+        if rankPresent == 0:
+            ranksFilteredSpeciesLineagesDict[lineage].append('NA')
+
+with open('blastFormattedNew.txt', 'w') as outfile:
+    separator = '\t'
+    outfile.write(f'#OTU ID\t{separator.join(ranksNeeded)}\tspecies\tpident\tqcov\totherSpeciesID\n')
+    for item in blastDict:
+        if blastDict[item]['taxonID'] == 'NA':
+            outfile.write(f'{item}\tNA\tNA\tNA\tNA\tNA\tNA')
+        else:
+            outfile.write(f'{item}\t{separator.join(ranksFilteredSpeciesLineagesDict[blastDict[item]["taxonID"]])}')
+        outfile.write(f'\t{blastDict[item]["speciesName"]}\t{blastDict[item]["pident"]}\t{blastDict[item]["qcov"]}\t{", ".join(speciesListDict[item])}\n')
+

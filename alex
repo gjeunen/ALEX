@@ -1,100 +1,195 @@
 #! /usr/bin/env python3
 
-## import modules
+##################
+# IMPORT MODULES #
+##################
+
 from function import __version__
-import rich
+import os, sys, copy, rich, datetime, collections
 import rich_click as click
-import collections
+import subprocess as sp
+from function.alex_functions import set_output_dir, download_file, tar_with_progress, remove_tar_intermediary, blast_to_memory, table_to_memory, fill_out_blast_dict, names_to_memory, nodes_to_memory, species_to_taxid_map, generate_lineage, filter_lineage, generate_mrca, write_output
 
-blastDict = collections.defaultdict(dict)
-speciesListDict = collections.defaultdict(list)
+#####################
+# CLI CONFIGURATION #
+#####################
+# formatting
+click.rich_click.USE_RICH_MARKUP = True
+click.rich_click.SHOW_METAVARS_COLUMN = False
+click.rich_click.APPEND_METAVARS_HELP = True
+click.rich_click.HEADER_TEXT = (f"[yellow]/[/][cyan]/[/][yellow]/[/] [bold][link=https://github.com/gjeunen/ALEX]ALEX[/link][/] | v{__version__}")
+click.rich_click.FOOTER_TEXT = "See [link=https://github.com/gjeunen/ALEX]https://github.com/gjeunen/ALEX[/] for more details."
+click.rich_click.ERRORS_SUGGESTION = f"This is ALEX [cyan]v{__version__}[/]\nFor more help, run '[yellow]crabs --help[/]' or visit [link=https://github.com/gjeunen/ALEX]https://github.com/gjeunen/ALEX[/]"
+click.rich_click.STYLE_ERRORS_SUGGESTION = ""
 
-with open('zotus_mock_community.fasta.nt.blastn', 'r') as infile:
-    for line in infile:
-        seqID = line.split('\t')[0]
-        speciesName = line.split('\t')[2]
-        pident = float(line.split('\t')[5])
-        qcov = int(line.split('\t')[7])
-        if seqID not in blastDict:
-            blastDict[seqID]['speciesName'] = speciesName
-            blastDict[seqID]['pident'] = pident
-            blastDict[seqID]['qcov'] = qcov
-        else:
-            if blastDict[seqID]['pident'] <= pident and blastDict[seqID]['qcov'] <= qcov and blastDict[seqID]['speciesName'] != speciesName and speciesName not in speciesListDict[seqID] and speciesName != 'N/A':
-                speciesListDict[seqID].append(speciesName)
+# grouping of options
+click.rich_click.OPTION_GROUPS = {
+    "alex": [
+        {
+            "name": "Download NCBI Taxonomy",
+            "options": [
+                "--download-taxonomy",
+                "--output",
+            ],
+        },
+        {
+            "name": "Generate the Most Recent Common Ancestor",
+            "options": [
+                "--mrca",
+                "--output",
+                "--blast-input",
+                "--table-input",
+                "--names-input",
+                "--nodes-input",
+            ],
+        },
+    ],
+}
 
-zotuList = []
-with open('zotutable.txt', 'r') as zotufile:
-    for line in zotufile:
-        seqID = line.split('\t')[0]
-        if seqID != 'ID':
-            zotuList.append(seqID)
+# link user-input to options
+@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 
-for item in zotuList:
-    if item not in blastDict:
-        blastDict[item]['pident'] = 'NA'
-        blastDict[item]['qcov'] = 'NA'
-        blastDict[item]['speciesName'] = 'NA'
+# ALEX functions
+@click.option("--download-taxonomy", "download_taxonomy_", is_flag = True, help = "Function to download NCBI taxonomy metadata files")
+@click.option("--mrca", "mrca_", is_flag = True, help = "Function to generate the MRCA from BLAST results")
 
-index_map = {v: i for i, v in enumerate(zotuList)}
-blastDict = dict(sorted(blastDict.items(), key=lambda pair: index_map[pair[0]]))
+# ALEX parameters
+@click.option("--output", "output_", help = "")
+@click.option("--blast-input", "blast_input_", help = "BLAST result input file")
+@click.option("--table-input", "table_input_", help = "OTU/ASV table input file")
+@click.option("--names-input", "names_input_", help = "names.dmp input file")
+@click.option("--nodes-input", "nodes_input_", help = "nodes.dmp input file")
 
-taxonIdsDict = {}
-taxonNamesDict = {}
-with open('names.dmp', 'r') as infile:
-    for line in infile:
-        sc = line.split('\t')[6]
-        if sc == 'scientific name':
-            taxIdName = line.split('\t|\t')[0]
-            taxonName = line.split('\t|\t')[1].replace(' ', '_')
-            taxonNamesDict[taxIdName] = taxonName
-            taxonIdsDict[taxonName] = taxIdName
+#################
+# MAIN FUNCTION #
+#################
+def alex(**kwargs):
+    """ALEX (Ancestor Link EXplorer) is an open-source software program that enables scientists to parse BLAST results and retrieve the MRCA (Most-Recent Common Ancestor).
+    
+    ALEX is split up into two functions, including:
 
-taxonIDsRankDict = {}
-taxonIDsRankUpDict = collections.defaultdict(list)
-with open('nodes.dmp', 'r') as infile:
-    for line in infile:
-        taxonId = line.split('\t|\t')[0]
-        taxonIdUp = line.split('\t|\t')[1]
-        taxonIdRank = line.split('\t|\t')[2]
-        taxonIDsRankDict[taxonId] = [taxonIdRank, taxonIdUp]
-        taxonIDsRankUpDict[taxonIdUp].append(taxonId)
+    (1) downloading NCBI taxonomy metadata files, and
+    
+    (2) generating the MRCA between all BLAST hits with equally-good matches to references,
+    
 
-taxonomicIDlist = []
-for item in blastDict:
-    if blastDict[item]['speciesName'].replace(' ', '_') in taxonIdsDict:
-        blastDict[item]['taxonID'] = taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')]
-        if taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')] not in taxonomicIDlist:
-            taxonomicIDlist.append(taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')])
-    else:
-        blastDict[item]['taxonID'] = 'NA'
 
-speciesLineagesDict = collections.defaultdict(list)
-for item in taxonomicIDlist:
-    initialItem = item
-    while item != taxonIDsRankDict[item][1]:
-        speciesLineagesDict[initialItem].append([taxonIDsRankDict[item][0], item, taxonNamesDict[item]])
-        item = taxonIDsRankDict[item][1]
+    A basic example to run ALEX (downloading the NCBI taxonomy information): 
+    
+    [blue bold]alex --download-taxonomy --output output_folder/[/]
+    """
 
-ranksFilteredSpeciesLineagesDict = collections.defaultdict(list)
-ranksNeeded = ['superkingdom', 'phylum', 'class', 'order', 'family', 'genus']
-for lineage in speciesLineagesDict:
-    for rank in ranksNeeded:
-        rankPresent = 0
-        for item in speciesLineagesDict[lineage]:
-            if rank == item[0]:
-                rankPresent = 1
-                ranksFilteredSpeciesLineagesDict[lineage].append(item[2])
-        if rankPresent == 0:
-            ranksFilteredSpeciesLineagesDict[lineage].append('NA')
+# access all options from kwargs
+    download_taxonomy_ = kwargs.get("download_taxonomy_")
+    mrca_ = kwargs.get("mrca_")
+    output_ = kwargs.get("output_")
+    blast_input_ = kwargs.get("blast_input_")
+    table_input_ = kwargs.get("table_input_")
+    names_input_ = kwargs.get("names_input_")
+    nodes_input_ = kwargs.get("nodes_input_")
 
-with open('blastFormattedNew.txt', 'w') as outfile:
-    separator = '\t'
-    outfile.write(f'#OTU ID\t{separator.join(ranksNeeded)}\tspecies\tpident\tqcov\totherSpeciesID\n')
-    for item in blastDict:
-        if blastDict[item]['taxonID'] == 'NA':
-            outfile.write(f'{item}\tNA\tNA\tNA\tNA\tNA\tNA')
-        else:
-            outfile.write(f'{item}\t{separator.join(ranksFilteredSpeciesLineagesDict[blastDict[item]["taxonID"]])}')
-        outfile.write(f'\t{blastDict[item]["speciesName"]}\t{blastDict[item]["pident"]}\t{blastDict[item]["qcov"]}\t{", ".join(speciesListDict[item])}\n')
+# print starting info to console
+    console = rich.console.Console(stderr=True, highlight=False)
+    console.print(f"\n[yellow]/[/][cyan]/[/][yellow]/[/] [bold][link=https://github.com/gjeunen/ALEX]ALEX[/link][/] | v{__version__}\n")
+    columns = [*rich.progress.Progress.get_default_columns(), rich.progress.TimeElapsedColumn()]
+    startTime = datetime.datetime.now()
+    formattedTime = startTime.strftime("%Y-%m-%d %H:%M:%S")
+    commandLineInput = ' '.join(sys.argv[1:])
+
+# identify function and execute
+#####################
+# DOWNLOAD TAXONOMY #
+#####################
+    if download_taxonomy_:
+        # print function to console
+        console.print(f"[cyan]|            Function[/] | Download NCBI taxonomy files")
+        # set output directory, url, and zipfilename
+        output_directory = set_output_dir(output_)
+        url = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
+        filename = url.split('/')[-1]
+        # download zip file
+        download_file(console, columns, url, output_directory, filename)
+        # unzip file
+        tar_with_progress(console, columns, output_directory, filename)
+        # remove zip and intermediary files
+        os.remove(f'{output_directory}{filename}')
+        remove_tar_intermediary(output_directory)
+
+##################
+# CALCULATE MRCA #
+##################
+    if mrca_:
+        # print function to console
+        console.print(f"[cyan]|            Function[/] | Calculate MRCA from BLAST result")
+        # read "--blast-input" into memory
+        blast_dict, species_dict, uniq_species_list = blast_to_memory(console, columns, blast_input_)
+        # read "--table-input" into memory
+        zotu_list = table_to_memory(console, columns, table_input_)
+        # update blast_dict for sequences for which no BLAST hit was found
+        blast_dict = fill_out_blast_dict(console, columns, zotu_list, blast_dict, species_dict)
+        # order blast_dict based on zotu_list to match entries 
+        index_map = {v:i for i, v in enumerate(zotu_list)}
+        blast_dict = dict(sorted(blast_dict.items(), key = lambda pair: index_map[pair[0]]))
+        # read names.dmp into memory (id_key_dict = taxonNamesDict, taxon_key_dict = taxonIdsDict)
+        id_key_dict, taxon_key_dict = names_to_memory(console, columns, names_input_)
+        # read nodes.dmp into memory (id_key_rank_up_values_dict = taxonIDsRankDict, up_key_down_list_dict = taxonIDsRankUpDict)
+        id_key_rank_up_values_dict, up_key_down_list_dict = nodes_to_memory(console, columns, nodes_input_)
+        # generate a species to tax ID mapping dict
+        species_taxid_dict = species_to_taxid_map(console, columns, uniq_species_list, taxon_key_dict)
+        # generate the taxonomic lineage for each species
+        species_lineages_dict = generate_lineage(console, columns, species_taxid_dict, id_key_rank_up_values_dict, id_key_dict)
+        # filter the taxonomic lineage to contain only specified ranks
+        filter_species_lineage_dict = filter_lineage(console, columns, species_lineages_dict)
+        # generate the mrca for each sequence ID
+        mrca_dict = generate_mrca(species_dict, filter_species_lineage_dict, species_taxid_dict)
+        # for item in blast_dict:
+        #     print(item, mrca_dict[item], species_dict[item], blast_dict[item]['pident'], blast_dict[item]['qcov'])
+        # write to output file
+        write_output(blast_dict, mrca_dict, species_dict, output_)
+
+
+################
+# EXECUTE CODE #
+################
+if __name__ == "__main__":
+    alex()
+
+
+# taxonomicIDlist = []
+# for item in blastDict:
+#     if blastDict[item]['speciesName'].replace(' ', '_') in taxonIdsDict:
+#         blastDict[item]['taxonID'] = taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')]
+#         if taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')] not in taxonomicIDlist:
+#             taxonomicIDlist.append(taxonIdsDict[blastDict[item]['speciesName'].replace(' ', '_')])
+#     else:
+#         blastDict[item]['taxonID'] = 'NA'
+
+# speciesLineagesDict = collections.defaultdict(list)
+# for item in taxonomicIDlist:
+#     initialItem = item
+#     while item != taxonIDsRankDict[item][1]:
+#         speciesLineagesDict[initialItem].append([taxonIDsRankDict[item][0], item, taxonNamesDict[item]])
+#         item = taxonIDsRankDict[item][1]
+
+# ranksFilteredSpeciesLineagesDict = collections.defaultdict(list)
+# ranksNeeded = ['superkingdom', 'phylum', 'class', 'order', 'family', 'genus']
+# for lineage in speciesLineagesDict:
+#     for rank in ranksNeeded:
+#         rankPresent = 0
+#         for item in speciesLineagesDict[lineage]:
+#             if rank == item[0]:
+#                 rankPresent = 1
+#                 ranksFilteredSpeciesLineagesDict[lineage].append(item[2])
+#         if rankPresent == 0:
+#             ranksFilteredSpeciesLineagesDict[lineage].append('NA')
+
+# with open('M9_asvs_tombRaider_alex.fasta.nt.blastn.txt', 'w') as outfile:
+#     separator = '\t'
+#     outfile.write(f'#OTU ID\t{separator.join(ranksNeeded)}\tspecies\tpident\tqcov\totherSpeciesID\n')
+#     for item in blastDict:
+#         if blastDict[item]['taxonID'] == 'NA':
+#             outfile.write(f'{item}\tNA\tNA\tNA\tNA\tNA\tNA')
+#         else:
+#             outfile.write(f'{item}\t{separator.join(ranksFilteredSpeciesLineagesDict[blastDict[item]["taxonID"]])}')
+#         outfile.write(f'\t{blastDict[item]["speciesName"]}\t{blastDict[item]["pident"]}\t{blastDict[item]["qcov"]}\t{", ".join(speciesListDict[item])}\n')
 

@@ -1,1 +1,1 @@
-# ALEX (Ancestor Link EXplorer)
+# ALEX (Ancestor Lineage EXplorer)

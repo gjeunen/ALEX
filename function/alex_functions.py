@@ -218,7 +218,7 @@ def filter_lineage(console, columns, species_lineages_dict):
     filters the existing taxonomic lineage and returns a clean dictionary
     '''
     filter_species_lineage_dict = collections.defaultdict(list)
-    ranks_needed = ['superkingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    ranks_needed = ['kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
     total_size = len(species_lineages_dict)
     with rich.progress.Progress(*columns) as progress_bar:
         pbar = progress_bar.add_task(console = console, description = "[cyan]|       Extracting...[/] |", total=total_size)
@@ -239,7 +239,7 @@ def generate_mrca(species_dict, filter_species_lineage_dict, species_taxid_dict)
     looks up the taxonomic lineages for each sequence ID and returns the MRCA
     '''
     mrca_dict = {}
-    ranks_needed = ['superkingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    ranks_needed = ['kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
     for item in species_dict:
         if len(species_dict[item]) == 1:
             try:
@@ -271,7 +271,7 @@ def write_output(blast_dict, mrca_dict, species_dict, output_):
     write results to output file
     '''
     separator = '\t'
-    ranks_needed = ['superkingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+    ranks_needed = ['kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
     with open(output_, 'w') as outfile:
         outfile.write(f'#OTU ID\t{separator.join(ranks_needed)}\tpident\tqcov\tmatching species IDs\n')
         for item in blast_dict:

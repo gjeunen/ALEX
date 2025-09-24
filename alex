@@ -8,7 +8,7 @@ from function import __version__
 import os, sys, copy, rich, datetime, collections
 import rich_click as click
 import subprocess as sp
-from function.alex_functions import set_output_dir, download_file, tar_with_progress, remove_tar_intermediary, blast_to_memory, table_to_memory, fill_out_blast_dict, names_to_memory, nodes_to_memory, species_to_taxid_map, generate_lineage, filter_lineage, generate_mrca, write_output
+from function.alex_functions import set_output_dir, download_file, tar_with_progress, remove_tar_intermediary, blast_to_memory, table_to_memory, fasta_to_memory, fill_out_blast_dict, crabs_to_memory, create_mrca, write_output2, names_to_memory, nodes_to_memory, species_to_taxid_map, generate_lineage, filter_lineage, generate_mrca, write_output
 
 #####################
 # CLI CONFIGURATION #
@@ -37,10 +37,12 @@ click.rich_click.OPTION_GROUPS = {
             "options": [
                 "--mrca",
                 "--output",
-                "--blast-input",
-                "--table-input",
-                "--names-input",
-                "--nodes-input",
+                "--blast",
+                "--table",
+                "--fasta",
+                "--names",
+                "--nodes",
+                "--crabs",
             ],
         },
     ],
@@ -55,10 +57,12 @@ click.rich_click.OPTION_GROUPS = {
 
 # ALEX parameters
 @click.option("--output", "output_", help = "")
-@click.option("--blast-input", "blast_input_", help = "BLAST result input file")
-@click.option("--table-input", "table_input_", help = "OTU/ASV table input file")
-@click.option("--names-input", "names_input_", help = "names.dmp input file")
-@click.option("--nodes-input", "nodes_input_", help = "nodes.dmp input file")
+@click.option("--blast", "blast_input_", help = "BLAST result input file")
+@click.option("--table", "table_input_", help = "OTU/ASV table input file")
+@click.option("--names", "names_input_", help = "names.dmp input file")
+@click.option("--nodes", "nodes_input_", help = "nodes.dmp input file")
+@click.option("--crabs", "crabs_", help = "crabs reference database input file")
+@click.option("--fasta", "fasta_", help = "ASV fasta input file")
 
 #################
 # MAIN FUNCTION #
@@ -87,6 +91,8 @@ def alex(**kwargs):
     table_input_ = kwargs.get("table_input_")
     names_input_ = kwargs.get("names_input_")
     nodes_input_ = kwargs.get("nodes_input_")
+    crabs_ = kwargs.get("crabs_")
+    fasta_ = kwargs.get("fasta_")
 
 # print starting info to console
     console = rich.console.Console(stderr=True, highlight=False)
@@ -123,29 +129,41 @@ def alex(**kwargs):
         console.print(f"[cyan]|            Function[/] | Calculate MRCA from BLAST result")
         # read "--blast-input" into memory
         blast_dict, species_dict, uniq_species_list = blast_to_memory(console, columns, blast_input_)
-        # read "--table-input" into memory
-        zotu_list = table_to_memory(console, columns, table_input_)
+        # read "--table-input" or "--fasta" into memory
+        if fasta_:
+            zotu_list = fasta_to_memory(console, columns, fasta_)
+        else:
+            zotu_list = table_to_memory(console, columns, table_input_)
         # update blast_dict for sequences for which no BLAST hit was found
         blast_dict = fill_out_blast_dict(console, columns, zotu_list, blast_dict, species_dict)
         # order blast_dict based on zotu_list to match entries 
         index_map = {v:i for i, v in enumerate(zotu_list)}
         blast_dict = dict(sorted(blast_dict.items(), key = lambda pair: index_map[pair[0]]))
-        # read names.dmp into memory (id_key_dict = taxonNamesDict, taxon_key_dict = taxonIdsDict)
-        id_key_dict, taxon_key_dict = names_to_memory(console, columns, names_input_)
-        # read nodes.dmp into memory (id_key_rank_up_values_dict = taxonIDsRankDict, up_key_down_list_dict = taxonIDsRankUpDict)
-        id_key_rank_up_values_dict, up_key_down_list_dict = nodes_to_memory(console, columns, nodes_input_)
-        # generate a species to tax ID mapping dict
-        species_taxid_dict = species_to_taxid_map(console, columns, uniq_species_list, taxon_key_dict)
-        # generate the taxonomic lineage for each species
-        species_lineages_dict = generate_lineage(console, columns, species_taxid_dict, id_key_rank_up_values_dict, id_key_dict)
-        # filter the taxonomic lineage to contain only specified ranks
-        filter_species_lineage_dict = filter_lineage(console, columns, species_lineages_dict)
-        # generate the mrca for each sequence ID
-        mrca_dict = generate_mrca(species_dict, filter_species_lineage_dict, species_taxid_dict)
-        # for item in blast_dict:
-        #     print(item, mrca_dict[item], species_dict[item], blast_dict[item]['pident'], blast_dict[item]['qcov'])
-        # write to output file
-        write_output(blast_dict, mrca_dict, species_dict, output_)
+        # use CRABS database to extract taxonomic information if available, otherwise use nodes.dmp and names.dmp
+        if crabs_:
+            # read crabs_ into memory
+            species_lineages_dict = crabs_to_memory(console, columns, crabs_, uniq_species_list)
+            # generate the MRCA
+            mrca_dict, contributing_species = create_mrca(console, columns, species_dict, species_lineages_dict)
+            # write output file
+            write_output2(blast_dict, mrca_dict, contributing_species, output_)
+        else:
+            # read names.dmp into memory (id_key_dict = taxonNamesDict, taxon_key_dict = taxonIdsDict)
+            id_key_dict, taxon_key_dict = names_to_memory(console, columns, names_input_)
+            # read nodes.dmp into memory (id_key_rank_up_values_dict = taxonIDsRankDict, up_key_down_list_dict = taxonIDsRankUpDict)
+            id_key_rank_up_values_dict, up_key_down_list_dict = nodes_to_memory(console, columns, nodes_input_)
+            # generate a species to tax ID mapping dict
+            species_taxid_dict = species_to_taxid_map(console, columns, uniq_species_list, taxon_key_dict)
+            # generate the taxonomic lineage for each species
+            species_lineages_dict = generate_lineage(console, columns, species_taxid_dict, id_key_rank_up_values_dict, id_key_dict)
+            # filter the taxonomic lineage to contain only specified ranks
+            filter_species_lineage_dict = filter_lineage(console, columns, species_lineages_dict)
+            # generate the mrca for each sequence ID
+            mrca_dict = generate_mrca(species_dict, filter_species_lineage_dict, species_taxid_dict)
+            # for item in blast_dict:
+            #     print(item, mrca_dict[item], species_dict[item], blast_dict[item]['pident'], blast_dict[item]['qcov'])
+            # write to output file
+            write_output(blast_dict, mrca_dict, species_dict, output_)
 
 
 ################

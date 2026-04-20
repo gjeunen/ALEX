@@ -138,7 +138,7 @@ def fasta_to_memory(console, columns, fasta_):
             for line in infile:
                 progress_bar.update(pbar, advance = len(line))
                 if line.startswith('>'):
-                    zotu_list.append(line.split(';')[0].lstrip('>'))
+                    zotu_list.append(line.split(';')[0].lstrip('>').rstrip('\n'))
     return zotu_list
 
 def table_to_memory(console, columns, table_input_):
